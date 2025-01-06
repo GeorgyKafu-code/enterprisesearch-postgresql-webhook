@@ -187,7 +187,7 @@ async function processAndIndexData(
           image: null,
           category: category,
           fileUrl: fileUrl,
-          fileSize: row.file_size,
+          fileSize: (row.file_size / (1024 * 1024)).toFixed(2), // Convert to MB,
           uploadedAt: row.uploaded_at,
         });
       });
