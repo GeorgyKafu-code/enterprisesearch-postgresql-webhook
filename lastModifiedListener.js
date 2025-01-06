@@ -89,7 +89,9 @@ async function fetchUpdatedRows(config) {
     console.log("Current updatedAt in Elasticsearch:", config.source.updatedAt);
 
     const query = `
-            SELECT row_id, change_time, new_value AS ${config.source.field_name}, action_type
+            SELECT row_id, change_time, new_value AS ${config.source.field_name}, action_type,
+            octet_length(new_value) AS file_size,
+            CURRENT_TIMESTAMP AS uploaded_at
             FROM ${config.source.table_name}_changelog
             WHERE change_time > $1
             ORDER BY change_time ASC
@@ -143,7 +145,10 @@ async function processAndIndexData(
 
     try {
       if (fieldType.toLowerCase() === "blob") {
-        const fileBuffer = Buffer.from(row[fieldName].replace(/\\x/g, ""), "hex");
+        const fileBuffer = Buffer.from(
+          row[fieldName].replace(/\\x/g, ""),
+          "hex"
+        );
         const fileName = `pg_${database_name}_${table_name}_file_${row.row_id}`;
 
         // Process BLOB Field
@@ -182,6 +187,8 @@ async function processAndIndexData(
           image: null,
           category: category,
           fileUrl: fileUrl,
+          fileSize: row.file_size,
+          uploadedAt: row.uploaded_at,
         });
       });
     }
