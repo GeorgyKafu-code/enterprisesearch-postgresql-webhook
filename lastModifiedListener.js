@@ -5,6 +5,7 @@ const processFieldContent =
   require("./postgresqlwebhookServices").processFieldContent;
 const processBlobField =
   require("./postgresqlwebhookServices").processBlobField;
+const detectMimeType = require("./postgresqlwebhookServices").detectMimeType;
 
 async function fetchIndicesWithPrefix(prefix) {
   try {
@@ -89,7 +90,7 @@ async function fetchUpdatedRows(config) {
     console.log("Current updatedAt in Elasticsearch:", config.source.updatedAt);
 
     const query = `
-            SELECT row_id, change_time, new_value AS ${config.source.field_name}, action_type,
+            SELECT row_id, title AS ${config.source.title_field}, change_time, new_value AS ${config.source.field_name}, action_type,
             octet_length(new_value) AS file_size,
             CURRENT_TIMESTAMP AS uploaded_at
             FROM ${config.source.table_name}_changelog
@@ -133,7 +134,7 @@ async function processAndIndexData(
   database_name,
   table_name,
   fieldName,
-  fieldType,
+  titleField,
   category,
   indexName
 ) {
@@ -142,26 +143,34 @@ async function processAndIndexData(
   for (const row of rows) {
     let processedContent;
     let fileUrl = "";
+    const fileBuffer = Buffer.from(row[fieldName].replace(/\\x/g, ""), "hex");
+    const fileName = row[titleField];
 
     try {
-      if (fieldType.toLowerCase() === "blob") {
-        const fileBuffer = Buffer.from(
-          row[fieldName].replace(/\\x/g, ""),
-          "hex"
-        );
-        const fileName = `pg_${database_name}_${table_name}_file_${row.row_id}`;
+      // Detect MIME type dynamically
+      const mimeType = await detectMimeType(fileBuffer);
 
-        // Process BLOB Field
-        const { extractedText, mimeType } = await processBlobField(fileBuffer);
+      if (
+        mimeType.startsWith("application/") ||
+        mimeType === "text/html" ||
+        mimeType === "text/csv" ||
+        mimeType === "text/xml" ||
+        mimeType === "text/plain"
+      ) {
+        console.log(`Detected MIME type: ${mimeType}`);
+        const { extractedText } = await processBlobField(fileBuffer, mimeType);
 
-        // Upload to Azure Blob Storage
+        // Upload file to Azure Blob Storage
         fileUrl = await uploadFileToBlob(fileBuffer, fileName, mimeType);
+
         console.log("File URL => ", fileUrl);
 
         processedContent = extractedText;
+
         console.log("Extracted text from buffer => ", processedContent);
       } else {
-        processedContent = await processFieldContent(row[fieldName], fieldType);
+        console.log("Unsupported MIME type:", mimeType);
+        continue;
       }
     } catch (error) {
       console.error(
@@ -182,7 +191,7 @@ async function processAndIndexData(
             row.action_type === "INSERT" ? "upload" : "mergeOrUpload",
           id: `pg_${database_name}_${table_name}_${row.row_id}_${index}`,
           content: chunk,
-          title: `PG Row ID ${row.row_id}`,
+          title: fileName,
           description: "No description",
           image: null,
           category: category,
@@ -237,7 +246,7 @@ async function processIndices(indices) {
               config.source.database,
               config.source.table_name,
               config.source.field_name,
-              config.source.field_type,
+              config.source.title_field,
               config.source.category,
               `tenant_${config.source.coid.toLowerCase()}`
             );
